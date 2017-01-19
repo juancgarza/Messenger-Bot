@@ -28,6 +28,20 @@ MENU_REPLIES =[
   payload: 'FULL_ADDRESS'
   }]
 
+  Bot.on :postback do |postback|
+    sender_id = postback.sender['id']
+    case postback.payload
+    when 'START' then show_replies_menu(postback.sender['id'], MENU_REPLIES)
+    when 'COORDINATES'
+      say(sender_id, IDIOMS[:ask_location], [{ content_type: 'location' }])
+      show_coordinates(sender_id)
+    when 'FULL_ADDRESS'
+      say(sender_id, IDIOMS[:ask_location], [{ content_type: 'location' }])
+      show_full_address(sender_id)
+    when 'LOCATION'
+      lookup_location(sender_id)
+    end
+  end
 
 
 def wait_for_user_input
@@ -45,18 +59,40 @@ def wait_for_user_input
   end
 end
 end
+
+
+def wait_for_command
+  Bot.on :message do |message|
+    puts "Received '#{message.inspect}' from #{message.sender}" # debug only
+    sender_id = message.sender['id']
+    case message.text
+    when /coord/i, /gps/i
+      message.reply(text: IDIOMS[:ask_location])
+      show_coordinates(sender_id)
+    when /full ad/i # we got the user even the address is misspelled
+      message.reply(text: IDIOMS[:ask_location])
+      show_full_address(sender_id)
+    else
+      message.reply(text: IDIOMS[:unknown_command])
+      show_replies_menu(sender_id, MENU_REPLIES)
+    end
+  end
+end
+
+
 def handle_api_request
   Bot.on :message do |message|
-    puts "Received '#{message.inspect}' from '#{message.sender}' "
-    parsed_response = get_parsed_response(API_URL , message.text)
-    unless parsed_response
+    parsed_response = get_parsed_response(API_URL, message.text)
+    message.type # let user know we're doing something
+    if parsed_response
+      yield(parsed_response, message)
+      wait_for_any_input
+    else
       message.reply(text: IDIOMS[:not_found])
-      wait_for_user_input
-      return
+      # meta-programming voodoo to call the callee
+      callee = Proc.new { caller_locations.first.label }
+      callee.call
     end
-    message.type #let's user know we're doing something
-    yield(parsed_response,message)
-    wait_for_user_input
   end
 end
 
@@ -110,5 +146,43 @@ def show_replies_menu(id,quick_replies)
   say(id ,IDIOMS[:menu_greeting],quick_replies)
   wait_for_command
 end
+# Set call to action button when user is about to address bot
+# for the first time.
+Facebook::Messenger::Thread.set({
+  setting_type: 'call_to_actions',
+  thread_state: 'new_thread',
+  call_to_actions: [
+    {
+      payload: 'START'
+    }
+  ]
+}, access_token: ENV['ACCESS_TOKEN'])
 
-wait_for_user_input
+# Create persistent menu
+Facebook::Messenger::Thread.set({
+  setting_type: 'call_to_actions',
+  thread_state: 'existing_thread',
+  call_to_actions: [
+    {
+      type: 'postback',
+      title: 'Get coordinates',
+      payload: 'COORDINATES'
+    },
+    {
+      type: 'postback',
+      title: 'Get full address',
+      payload: 'FULL_ADDRESS'
+    }
+  ]
+}, access_token: ENV['ACCESS_TOKEN'])
+
+# Set greeting (for first contact)
+Facebook::Messenger::Thread.set({
+  setting_type: 'greeting',
+  greeting: {
+    text: 'Coordinator welcomes you!'
+  },
+}, access_token: ENV['ACCESS_TOKEN'])
+
+
+wait_for_any_input
